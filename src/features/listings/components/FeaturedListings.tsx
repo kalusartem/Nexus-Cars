@@ -3,23 +3,37 @@ import { supabase } from "../../../lib/supabase";
 import { ListingCard } from "./ListingCard";
 import type { CarListing } from "../../../types/car.ts";
 
-export function FeaturedListings() {
+// 1. Pass filters as a prop
+export function FeaturedListings({ filters }: { filters: any }) {
   const {
     data: cars,
     isLoading,
     error,
   } = useQuery({
-    queryKey: ["featured-listings"],
+    // 2. Add filters to the queryKey so it refetches when they change!
+    queryKey: ["listings", filters],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("listings")
         .select("*")
         .eq("is_active", true)
-        .order("created_at", { ascending: false })
-        .limit(6);
+        .lte("price", filters.maxPrice); // Lower than or equal to price
 
+      if (filters.make) {
+        query = query.ilike("make", filters.make); // Filter by make
+      }
+
+      if (filters.search) {
+        query = query.or(
+          `make.ilike.%${filters.search}%,model.ilike.%${filters.search}%`,
+        );
+      }
+
+      const { data, error } = await query.order("created_at", {
+        ascending: false,
+      });
       if (error) throw error;
-      return data as CarListing[];
+      return data;
     },
   });
 
