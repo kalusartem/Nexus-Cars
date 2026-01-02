@@ -24,22 +24,23 @@ export default function App() {
         >
           🏎️💨 Car Market
         </Link>
-
-        <Link
-          to="/listings"
-          className="text-sm text-slate-300 hover:text-white"
-        >
-          Browse
-        </Link>
-        <Link to="/sell" className="text-sm text-slate-300 hover:text-white">
-          Sell
-        </Link>
-        <Link
-          to="/favorites"
-          className="text-sm text-slate-300 hover:text-white"
-        >
-          Favorites
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link
+            to="/listings"
+            className="text-sm text-slate-300 hover:text-white"
+          >
+            Browse
+          </Link>
+          <Link to="/sell" className="text-sm text-slate-300 hover:text-white">
+            Sell
+          </Link>
+          <Link
+            to="/favorites"
+            className="text-sm text-slate-300 hover:text-white"
+          >
+            Favorites
+          </Link>
+        </div>
       </nav>
 
       <Routes>
