@@ -3,6 +3,7 @@ import { useState } from "react";
 import { FilterBar } from "./features/listings/components/FilterBar";
 import { FeaturedListings } from "./features/listings/components/FeaturedListings";
 import { ListingsPage } from "./features/listings/pages/ListingsPage";
+import { ListingDetailsPage } from "./features/listings/pages/ListingDetailsPage";
 
 export default function App() {
   const [filters, setFilters] = useState({
@@ -40,6 +41,7 @@ export default function App() {
           }
         />
         <Route path="/listings" element={<ListingsPage />} />
+        <Route path="/listings/:id" element={<ListingDetailsPage />} />
       </Routes>
     </div>
   );
