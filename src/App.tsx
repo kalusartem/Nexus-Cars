@@ -6,6 +6,7 @@ import { ListingsPage } from "./features/listings/pages/ListingsPage";
 import { ListingDetailsPage } from "./features/listings/pages/ListingDetailsPage";
 import { CreateListingPage } from "./features/listings/pages/CreateListingPage";
 import { EditListingPage } from "./features/listings/pages/EditListingPage";
+import { FavoritesPage } from "./features/favorites/pages/FavoritesPage";
 
 export default function App() {
   const [filters, setFilters] = useState({
@@ -33,6 +34,12 @@ export default function App() {
         <Link to="/sell" className="text-sm text-slate-300 hover:text-white">
           Sell
         </Link>
+        <Link
+          to="/favorites"
+          className="text-sm text-slate-300 hover:text-white"
+        >
+          Favorites
+        </Link>
       </nav>
 
       <Routes>
@@ -49,6 +56,7 @@ export default function App() {
         <Route path="/listings/:id" element={<ListingDetailsPage />} />
         <Route path="/sell" element={<CreateListingPage />} />
         <Route path="/listings/:id/edit" element={<EditListingPage />} />
+        <Route path="/favorites" element={<FavoritesPage />} />
       </Routes>
     </div>
   );
