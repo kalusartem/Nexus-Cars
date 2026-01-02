@@ -5,6 +5,7 @@ import { FeaturedListings } from "./features/listings/components/FeaturedListing
 import { ListingsPage } from "./features/listings/pages/ListingsPage";
 import { ListingDetailsPage } from "./features/listings/pages/ListingDetailsPage";
 import { CreateListingPage } from "./features/listings/pages/CreateListingPage";
+import { EditListingPage } from "./features/listings/pages/EditListingPage";
 
 export default function App() {
   const [filters, setFilters] = useState({
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/listings" element={<ListingsPage />} />
         <Route path="/listings/:id" element={<ListingDetailsPage />} />
         <Route path="/sell" element={<CreateListingPage />} />
+        <Route path="/listings/:id/edit" element={<EditListingPage />} />
       </Routes>
     </div>
   );

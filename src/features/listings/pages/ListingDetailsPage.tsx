@@ -1,23 +1,57 @@
-import { useParams, Link } from "react-router-dom";
+// src/features/listings/pages/ListingDetailsPage.tsx
+import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
+
+type ListingImage = {
+  bucket: string;
+  path: string;
+  position: number;
+};
+
+type ListingRow = {
+  id: string;
+  make: string;
+  model: string;
+  year: number | null;
+  price: number | string;
+  mileage: number | null;
+  fuel_type: string | null;
+  transmission: string | null;
+  description: string | null;
+  location: string | null;
+  created_at: string | null;
+  listing_images?: ListingImage[] | null;
+};
 
 async function fetchListing(id: string) {
   const { data, error } = await supabase
     .from("listings")
-    .select("*")
+    .select("*, listing_images(bucket, path, position)")
     .eq("id", id)
     .single();
 
   if (error) throw error;
-  return data;
+  return data as ListingRow;
 }
 
-const { data } = supabase.storage
-  .from("project-images")
-  .getPublicUrl("listings/test/1.jpg");
+function publicUrl(bucket: string, path: string) {
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return data.publicUrl;
+}
 
-console.log("**test: ", data.publicUrl);
+function formatMileage(mileage: any) {
+  if (typeof mileage === "number") return `${mileage.toLocaleString()} mi`;
+  if (mileage === null || mileage === undefined) return "—";
+  const n = Number(mileage);
+  return Number.isFinite(n) ? `${n.toLocaleString()} mi` : String(mileage);
+}
+
+function formatDate(date: any) {
+  if (!date) return "—";
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+}
 
 export function ListingDetailsPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,17 +62,53 @@ export function ListingDetailsPage() {
     enabled: !!id,
   });
 
-  if (isLoading) return <div className="p-6 text-slate-300">Loading…</div>;
-  if (isError)
+  if (!id) {
     return (
-      <div className="p-6 text-red-300">
-        Failed to load listing: {(error as any)?.message ?? "Unknown error"}
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        Missing listing id.
       </div>
     );
+  }
 
-  const row: any = data;
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        Loading listing…
+      </div>
+    );
+  }
 
-  const images: string[] = Array.isArray(row.image_urls) ? row.image_urls : [];
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        <div className="text-red-300">
+          Failed to load listing: {(error as any)?.message ?? "Unknown error"}
+        </div>
+        <Link to="/listings" className="text-blue-400 hover:underline">
+          Back to listings
+        </Link>
+      </div>
+    );
+  }
+
+  const row = data;
+  if (!row) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        Listing not found.{" "}
+        <Link to="/listings" className="text-blue-400 hover:underline">
+          Back to listings
+        </Link>
+      </div>
+    );
+  }
+
+  const images = (row.listing_images ?? [])
+    .slice()
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+  const cover = images[0];
+  const coverUrl = cover ? publicUrl(cover.bucket, cover.path) : null;
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -53,8 +123,8 @@ export function ListingDetailsPage() {
               <h1 className="text-2xl font-semibold">
                 {row.make} {row.model} {row.year ? `(${row.year})` : ""}
               </h1>
-              <p className="text-slate-400 mt-1">
-                Listing #{row.id?.toString().slice(0, 8)}
+              <p className="text-slate-400 mt-1 text-sm">
+                Posted: {formatDate(row.created_at)}
               </p>
             </div>
 
@@ -63,35 +133,48 @@ export function ListingDetailsPage() {
             </div>
           </div>
 
-          {/* Image placeholder (upgrade next) */}
-          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950/40 h-64 flex items-center justify-center text-slate-500">
-            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {images.length ? (
-                images.map((url, idx) => (
-                  <img
-                    key={url + idx}
-                    src={url}
-                    alt={`${row.make} ${row.model} ${idx + 1}`}
-                    className="w-full h-64 object-cover rounded-xl border border-slate-800"
-                  />
-                ))
-              ) : (
-                <div className="rounded-xl border border-slate-800 bg-slate-950/40 h-64 flex items-center justify-center text-slate-500 sm:col-span-2">
-                  No images available
-                </div>
-              )}
-            </div>
+          {/* Cover */}
+          <div className="mt-6">
+            {coverUrl ? (
+              <img
+                src={coverUrl}
+                alt={`${row.make} ${row.model} cover`}
+                className="w-full h-80 object-cover rounded-xl border border-slate-800"
+              />
+            ) : (
+              <div className="w-full h-80 rounded-xl border border-slate-800 bg-slate-950/40 flex items-center justify-center text-slate-500">
+                No images available
+              </div>
+            )}
           </div>
 
+          {/* Gallery */}
+          {images.length > 1 ? (
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {images.slice(1).map((img, idx) => {
+                const url = publicUrl(img.bucket, img.path);
+                return (
+                  <img
+                    key={`${img.path}-${idx}`}
+                    src={url}
+                    alt={`${row.make} ${row.model} ${idx + 2}`}
+                    className="w-full h-40 object-cover rounded-xl border border-slate-800"
+                    loading="lazy"
+                  />
+                );
+              })}
+            </div>
+          ) : null}
+
+          {/* Specs */}
           <div className="mt-6 grid sm:grid-cols-2 gap-4">
             <Spec label="Mileage" value={formatMileage(row.mileage)} />
             <Spec label="Transmission" value={row.transmission ?? "—"} />
             <Spec label="Fuel" value={row.fuel_type ?? "—"} />
-            <Spec label="Body" value={row.body_type ?? "—"} />
             <Spec label="Location" value={row.location ?? "—"} />
-            <Spec label="Posted" value={formatDate(row.created_at)} />
           </div>
 
+          {/* Description */}
           <div className="mt-6">
             <h2 className="font-semibold">Description</h2>
             <p className="text-slate-300 mt-2 whitespace-pre-line">
@@ -99,6 +182,7 @@ export function ListingDetailsPage() {
             </p>
           </div>
 
+          {/* CTAs */}
           <div className="mt-6 flex gap-3 flex-wrap">
             <button className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">
               Save (next)
@@ -106,6 +190,14 @@ export function ListingDetailsPage() {
             <button className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700">
               Contact seller (next)
             </button>
+
+            {/* Optional: edit link for owner (you can guard this later) */}
+            <Link
+              to={`/listings/${row.id}/edit`}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700"
+            >
+              Edit
+            </Link>
           </div>
         </div>
       </div>
@@ -120,16 +212,4 @@ function Spec({ label, value }: { label: string; value: string }) {
       <div className="text-slate-100 mt-1">{value}</div>
     </div>
   );
-}
-
-function formatMileage(mileage: any) {
-  if (typeof mileage === "number") return `${mileage.toLocaleString()} mi`;
-  if (mileage === null || mileage === undefined) return "—";
-  return String(mileage);
-}
-
-function formatDate(date: any) {
-  if (!date) return "—";
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
 }

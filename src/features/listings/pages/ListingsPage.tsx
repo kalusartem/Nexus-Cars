@@ -13,6 +13,23 @@ type Filters = {
 
 type SortKey = "newest" | "price_asc" | "price_desc";
 
+type ListingImage = {
+  bucket: string;
+  path: string;
+  position: number;
+};
+
+type ListingRow = {
+  id: string;
+  make: string;
+  model: string;
+  year: number | null;
+  price: number | string;
+  mileage: number | null;
+  created_at: string | null;
+  listing_images?: ListingImage[] | null;
+};
+
 const PAGE_SIZE = 12;
 
 function toNumber(value: string | null, fallback: number) {
@@ -24,6 +41,11 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function publicUrl(bucket: string, path: string) {
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return data.publicUrl;
+}
+
 async function fetchListings(args: {
   filters: Filters;
   sort: SortKey;
@@ -33,20 +55,19 @@ async function fetchListings(args: {
 
   let q = supabase
     .from("listings")
-    .select("*", { count: "exact" })
+    .select("*, listing_images(bucket, path, position)", { count: "exact" })
     .eq("is_active", true);
 
-  // Search: adjust fields if your schema differs
-  // (Common fields: make, model, title, description)
   const term = filters.search.trim();
   if (term) {
+    // Adjust if you have more fields (title, description, etc.)
     q = q.or(`make.ilike.%${term}%,model.ilike.%${term}%`);
   }
 
   if (filters.make) q = q.eq("make", filters.make);
   if (filters.maxPrice) q = q.lte("price", filters.maxPrice);
 
-  // Sort: adjust created_at if different
+  // Sorting
   if (sort === "newest") q = q.order("created_at", { ascending: false });
   if (sort === "price_asc") q = q.order("price", { ascending: true });
   if (sort === "price_desc") q = q.order("price", { ascending: false });
@@ -59,13 +80,13 @@ async function fetchListings(args: {
   const { data, error, count } = await q;
   if (error) throw error;
 
-  return { rows: data ?? [], count: count ?? 0 };
+  return { rows: (data ?? []) as ListingRow[], count: count ?? 0 };
 }
 
 export function ListingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // --- Read URL -> state defaults ---
+  // Read URL -> defaults
   const urlFilters = useMemo<Filters>(() => {
     const search = searchParams.get("q") ?? "";
     const make = searchParams.get("make") ?? "";
@@ -80,19 +101,16 @@ export function ListingsPage() {
   const urlSort = (searchParams.get("sort") as SortKey) ?? "newest";
   const urlPage = clamp(toNumber(searchParams.get("page"), 1), 1, 1_000_000);
 
-  // Local state (controlled inputs)
   const [filters, setFilters] = useState<Filters>(urlFilters);
   const [sort, setSort] = useState<SortKey>(urlSort);
 
-  // Keep local state in sync with URL changes (back/forward, direct link)
+  // Sync local state with URL changes
   useEffect(() => setFilters(urlFilters), [urlFilters]);
   useEffect(() => setSort(urlSort), [urlSort]);
 
-  // Push filters/sort -> URL, reset page on change
+  // Push filters/sort -> URL, reset page
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
-
-    // Reset page when filters/sort changes
     next.set("page", "1");
 
     if (filters.search) next.set("q", filters.search);
@@ -133,21 +151,30 @@ export function ListingsPage() {
           <div>
             <h1 className="text-2xl font-semibold">Browse Listings</h1>
             <p className="text-slate-400 text-sm mt-1">
-              Find the right car — filter, sort, and share your search.
+              Filter, sort, and share your search.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-300">Sort</label>
-            <select
-              className="bg-slate-800 rounded-lg px-3 py-2 text-white"
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
+          <div className="flex items-center gap-3">
+            <Link
+              to="/sell"
+              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm"
             >
-              <option value="newest">Newest</option>
-              <option value="price_asc">Price: Low → High</option>
-              <option value="price_desc">Price: High → Low</option>
-            </select>
+              Sell
+            </Link>
+
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-300">Sort</label>
+              <select
+                className="bg-slate-800 rounded-lg px-3 py-2 text-white"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as SortKey)}
+              >
+                <option value="newest">Newest</option>
+                <option value="price_asc">Price: Low → High</option>
+                <option value="price_desc">Price: High → Low</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -175,7 +202,6 @@ export function ListingsPage() {
               <button
                 className="text-sm text-slate-300 hover:text-white"
                 onClick={() => {
-                  // Clear all filters -> URL
                   setSearchParams(
                     new URLSearchParams({
                       maxPrice: "200000",
@@ -195,28 +221,51 @@ export function ListingsPage() {
               </div>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {(data?.rows ?? []).map((row: any) => (
-                  <Link
-                    key={row.id}
-                    to={`/listings/${row.id}`}
-                    className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 hover:border-slate-700 transition"
-                  >
-                    <div className="font-semibold">
-                      {row.make} {row.model}
-                    </div>
+                {(data?.rows ?? []).map((row) => {
+                  const images = (row.listing_images ?? [])
+                    .slice()
+                    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+                  const cover = images[0];
+                  const coverUrl = cover
+                    ? publicUrl(cover.bucket, cover.path)
+                    : null;
 
-                    <div className="text-slate-300 mt-1">
-                      ${Number(row.price).toLocaleString()}
-                    </div>
+                  return (
+                    <Link
+                      key={row.id}
+                      to={`/listings/${row.id}`}
+                      className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 hover:border-slate-700 transition"
+                    >
+                      {coverUrl ? (
+                        <img
+                          src={coverUrl}
+                          alt={`${row.make} ${row.model}`}
+                          className="w-full h-40 object-cover rounded-xl border border-slate-800 mb-3"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-40 rounded-xl border border-slate-800 bg-slate-950/40 mb-3 flex items-center justify-center text-slate-500">
+                          No image
+                        </div>
+                      )}
 
-                    <div className="text-xs text-slate-400 mt-2">
-                      {row.year ?? "—"} •{" "}
-                      {typeof row.mileage === "number"
-                        ? `${row.mileage.toLocaleString()} mi`
-                        : (row.mileage ?? "—")}
-                    </div>
-                  </Link>
-                ))}
+                      <div className="font-semibold">
+                        {row.make} {row.model}
+                      </div>
+
+                      <div className="text-slate-300 mt-1">
+                        ${Number(row.price).toLocaleString()}
+                      </div>
+
+                      <div className="text-xs text-slate-400 mt-2">
+                        {row.year ?? "—"} •{" "}
+                        {typeof row.mileage === "number"
+                          ? `${row.mileage.toLocaleString()} mi`
+                          : (row.mileage ?? "—")}
+                      </div>
+                    </Link>
+                  );
+                })}
               </div>
             )}
 

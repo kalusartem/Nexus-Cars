@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
 
 type ExistingImage = {
@@ -11,11 +11,10 @@ type ExistingImage = {
 
 type Props = {
   listingId: string; // must exist already
-  existingImages?: ExistingImage[]; // optional: if editing
   onUploaded?: () => void; // optional: callback to refetch
 };
 
-const BUCKET = "project-images";
+const BUCKET = "car-images";
 
 function getFileExt(filename: string) {
   const parts = filename.split(".");
@@ -23,13 +22,11 @@ function getFileExt(filename: string) {
 }
 
 function safeImageExt(ext: string) {
-  // keep it simple; Storage cares less, but this helps consistency
   const allowed = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
   return allowed.has(ext) ? ext : "jpg";
 }
 
 function buildObjectPath(listingId: string, ext: string) {
-  // Example: listings/<listing-id>/<random>.jpg
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -37,17 +34,35 @@ function buildObjectPath(listingId: string, ext: string) {
   return `listings/${listingId}/${id}.${ext}`;
 }
 
-export function ListingImageUploader({
-  listingId,
-  existingImages = [],
-  onUploaded,
-}: Props) {
+export function ListingImageUploader({ listingId, onUploaded }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const qc = useQueryClient();
 
   const [selected, setSelected] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // ✅ Option A: self-fetch existing images
+  const {
+    data: existingImages = [],
+    isLoading: imagesLoading,
+    isError: imagesIsError,
+    error: imagesError,
+  } = useQuery({
+    queryKey: ["listing-images", listingId],
+    enabled: !!listingId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("listing_images")
+        .select("id, bucket, path, position")
+        .eq("listing_id", listingId)
+        .order("position", { ascending: true });
+
+      if (error) throw error;
+      return (data ?? []) as ExistingImage[];
+    },
+    staleTime: 1000 * 10,
+  });
 
   const existingSorted = useMemo(() => {
     return [...existingImages].sort((a, b) => a.position - b.position);
@@ -58,16 +73,19 @@ export function ListingImageUploader({
       file,
       url: URL.createObjectURL(file),
     }));
-    // NOTE: we clean up URLs below in an effect-like pattern when selection changes
   }, [selected]);
 
   // Cleanup object URLs when selection changes/unmounts
-  // (simple pattern without useEffect to keep it compact)
   const prevUrlsRef = useRef<string[]>([]);
   if (prevUrlsRef.current.length) {
     for (const u of prevUrlsRef.current) URL.revokeObjectURL(u);
   }
   prevUrlsRef.current = previews.map((p) => p.url);
+
+  const publicUrl = (bucket: string, path: string) => {
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    return data.publicUrl;
+  };
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -77,13 +95,11 @@ export function ListingImageUploader({
       setErrorMsg(null);
       setBusy(true);
 
-      // compute starting position based on existing images
       const startPos =
         existingSorted.length > 0
           ? Math.max(...existingSorted.map((img) => img.position)) + 1
           : 0;
 
-      // 1) upload files
       const uploadedRows: Array<{
         bucket: string;
         path: string;
@@ -95,7 +111,6 @@ export function ListingImageUploader({
         const ext = safeImageExt(getFileExt(file.name));
         const path = buildObjectPath(listingId, ext);
 
-        // You can optionally set cacheControl; upsert false is safer
         const { error: uploadError } = await supabase.storage
           .from(BUCKET)
           .upload(path, file, {
@@ -104,9 +119,7 @@ export function ListingImageUploader({
             contentType: file.type || undefined,
           });
 
-        if (uploadError) {
-          throw uploadError;
-        }
+        if (uploadError) throw uploadError;
 
         uploadedRows.push({
           bucket: BUCKET,
@@ -115,7 +128,6 @@ export function ListingImageUploader({
         });
       }
 
-      // 2) insert rows into listing_images
       const payload = uploadedRows.map((r) => ({
         listing_id: listingId,
         bucket: r.bucket,
@@ -128,7 +140,7 @@ export function ListingImageUploader({
         .insert(payload);
 
       if (insertError) {
-        // Optional: rollback uploaded files (best-effort)
+        // best-effort rollback storage
         try {
           await supabase.storage
             .from(BUCKET)
@@ -139,11 +151,9 @@ export function ListingImageUploader({
         throw insertError;
       }
 
-      // 3) clear selection
       setSelected([]);
     },
     onSuccess: async () => {
-      // If you have a query like ["listing", id] or ["listing-images", id], refetch it
       await qc.invalidateQueries({ queryKey: ["listing", listingId] });
       await qc.invalidateQueries({ queryKey: ["listing-images", listingId] });
       onUploaded?.();
@@ -158,7 +168,6 @@ export function ListingImageUploader({
 
   const deleteMutation = useMutation({
     mutationFn: async (img: ExistingImage) => {
-      // 1) delete db row first (or storage first; either is fine)
       const { error: dbErr } = await supabase
         .from("listing_images")
         .delete()
@@ -166,13 +175,89 @@ export function ListingImageUploader({
 
       if (dbErr) throw dbErr;
 
-      // 2) delete file from storage (best-effort)
       const { error: stErr } = await supabase.storage
         .from(img.bucket)
         .remove([img.path]);
-      if (stErr) {
-        // not fatal, but surface it if you want
-        console.warn("Storage delete failed:", stErr.message);
+
+      if (stErr) console.warn("Storage delete failed:", stErr.message);
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["listing", listingId] });
+      await qc.invalidateQueries({ queryKey: ["listing-images", listingId] });
+      onUploaded?.();
+    },
+    onError: (err: any) => {
+      setErrorMsg(err?.message ?? "Delete failed");
+    },
+  });
+
+  const reorderMutation = useMutation({
+    mutationFn: async (args: { a: ExistingImage; b: ExistingImage }) => {
+      const { a, b } = args;
+      const temp = -999999;
+
+      const { error: e1 } = await supabase
+        .from("listing_images")
+        .update({ position: temp })
+        .eq("id", a.id);
+      if (e1) throw e1;
+
+      const { error: e2 } = await supabase
+        .from("listing_images")
+        .update({ position: a.position })
+        .eq("id", b.id);
+      if (e2) throw e2;
+
+      const { error: e3 } = await supabase
+        .from("listing_images")
+        .update({ position: b.position })
+        .eq("id", a.id);
+      if (e3) throw e3;
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["listing", listingId] });
+      await qc.invalidateQueries({ queryKey: ["listing-images", listingId] });
+      onUploaded?.();
+    },
+    onError: (err: any) => {
+      setErrorMsg(err?.message ?? "Reorder failed");
+    },
+  });
+
+  // ✅ Fixed "Set cover" to avoid unique(listing_id, position) collisions:
+  // two-phase update using an offset (1000 + i) then normalize to 0..n.
+  const setCoverMutation = useMutation({
+    mutationFn: async (img: ExistingImage) => {
+      const { data, error } = await supabase
+        .from("listing_images")
+        .select("id, position")
+        .eq("listing_id", listingId)
+        .order("position", { ascending: true });
+
+      if (error) throw error;
+
+      const rows = (data ?? []) as Array<{ id: string; position: number }>;
+      const idx = rows.findIndex((r) => r.id === img.id);
+      if (idx <= 0) return;
+
+      const reordered = [rows[idx], ...rows.filter((_, i) => i !== idx)];
+
+      // Phase 1: move everyone out of the way
+      for (let i = 0; i < reordered.length; i++) {
+        const { error: e } = await supabase
+          .from("listing_images")
+          .update({ position: 1000 + i })
+          .eq("id", reordered[i].id);
+        if (e) throw e;
+      }
+
+      // Phase 2: normalize to 0..n (cover becomes position 0)
+      for (let i = 0; i < reordered.length; i++) {
+        const { error: e } = await supabase
+          .from("listing_images")
+          .update({ position: i })
+          .eq("id", reordered[i].id);
+        if (e) throw e;
       }
     },
     onSuccess: async () => {
@@ -180,24 +265,20 @@ export function ListingImageUploader({
       await qc.invalidateQueries({ queryKey: ["listing-images", listingId] });
       onUploaded?.();
     },
+    onError: (err: any) => {
+      setErrorMsg(err?.message ?? "Set cover failed");
+    },
   });
 
   const onPick = (files: FileList | null) => {
     if (!files) return;
     const arr = Array.from(files);
-
-    // basic validation
     const filtered = arr.filter((f) => f.type.startsWith("image/"));
     setSelected((prev) => [...prev, ...filtered]);
   };
 
   const removeSelected = (index: number) => {
     setSelected((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const publicUrl = (bucket: string, path: string) => {
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-    return data.publicUrl;
   };
 
   return (
@@ -245,28 +326,103 @@ export function ListingImageUploader({
       ) : null}
 
       {/* Existing images */}
-      {existingSorted.length > 0 ? (
+      {imagesLoading ? (
+        <div className="mt-4 text-sm text-slate-400">Loading images…</div>
+      ) : imagesIsError ? (
+        <div className="mt-4 text-sm text-red-300">
+          Failed to load images:{" "}
+          {(imagesError as any)?.message ?? "Unknown error"}
+        </div>
+      ) : existingSorted.length > 0 ? (
         <div className="mt-4">
           <div className="text-sm text-slate-300 mb-2">Current images</div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {existingSorted.map((img) => {
+            {existingSorted.map((img, index) => {
               const url = publicUrl(img.bucket, img.path);
+              const isCover = index === 0;
+
+              const moveUp = () => {
+                if (index === 0) return;
+                reorderMutation.mutate({
+                  a: existingSorted[index - 1],
+                  b: img,
+                });
+              };
+
+              const moveDown = () => {
+                if (index === existingSorted.length - 1) return;
+                reorderMutation.mutate({
+                  a: img,
+                  b: existingSorted[index + 1],
+                });
+              };
+
               return (
-                <div key={img.id} className="relative group">
+                <div
+                  key={img.id}
+                  className="relative rounded-xl border border-slate-800 overflow-hidden"
+                >
                   <img
                     src={url}
                     alt="Listing"
-                    className="w-full h-32 object-cover rounded-xl border border-slate-800"
+                    className="w-full h-32 object-cover"
                   />
-                  <button
-                    type="button"
-                    className="absolute top-2 right-2 px-2 py-1 text-xs rounded bg-black/60 hover:bg-black/80 opacity-0 group-hover:opacity-100 transition"
-                    onClick={() => deleteMutation.mutate(img)}
-                    disabled={deleteMutation.isPending}
-                    title="Remove"
-                  >
-                    ✕
-                  </button>
+
+                  {isCover ? (
+                    <div className="absolute top-2 left-2 text-xs px-2 py-1 rounded bg-black/70">
+                      Cover
+                    </div>
+                  ) : null}
+
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 flex items-center justify-between gap-2">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-xs rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                        onClick={moveUp}
+                        disabled={index === 0 || reorderMutation.isPending}
+                        title="Move up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-xs rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                        onClick={moveDown}
+                        disabled={
+                          index === existingSorted.length - 1 ||
+                          reorderMutation.isPending
+                        }
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                    </div>
+
+                    <div className="flex gap-2">
+                      {!isCover ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1 text-xs rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-50"
+                          onClick={() => setCoverMutation.mutate(img)}
+                          disabled={setCoverMutation.isPending}
+                          title="Set as cover"
+                        >
+                          Set cover
+                        </button>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-xs rounded bg-red-600/70 hover:bg-red-600 disabled:opacity-50"
+                        onClick={() => deleteMutation.mutate(img)}
+                        disabled={deleteMutation.isPending}
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
                 </div>
               );
             })}
