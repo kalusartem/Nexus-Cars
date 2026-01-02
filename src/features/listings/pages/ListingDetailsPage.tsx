@@ -32,6 +32,8 @@ export function ListingDetailsPage() {
 
   const row: any = data;
 
+  const images: string[] = Array.isArray(row.image_urls) ? row.image_urls : [];
+
   return (
     <div className="min-h-screen bg-slate-950 text-white">
       <div className="max-w-5xl mx-auto px-6 py-8">
@@ -57,7 +59,22 @@ export function ListingDetailsPage() {
 
           {/* Image placeholder (upgrade next) */}
           <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950/40 h-64 flex items-center justify-center text-slate-500">
-            Image gallery goes here
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {images.length ? (
+                images.map((url, idx) => (
+                  <img
+                    key={url + idx}
+                    src={url}
+                    alt={`${row.make} ${row.model} ${idx + 1}`}
+                    className="w-full h-64 object-cover rounded-xl border border-slate-800"
+                  />
+                ))
+              ) : (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 h-64 flex items-center justify-center text-slate-500 sm:col-span-2">
+                  No images available
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="mt-6 grid sm:grid-cols-2 gap-4">
