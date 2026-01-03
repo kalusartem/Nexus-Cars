@@ -9,7 +9,7 @@ export type ListingRow = {
   make: string;
   model: string;
   year: number;
-  price: number; // numeric from supabase may come as string; we normalize in form state
+  price: number;
   mileage: number;
   fuel_type: string;
   transmission: string;
@@ -22,9 +22,9 @@ type Mode = "create" | "edit";
 
 type Props = {
   mode: Mode;
-  initial?: Partial<ListingRow>; // for edit
-  listingId?: string; // required in edit (and for uploader)
-  showImages?: boolean; // show uploader in edit
+  initial?: Partial<ListingRow>;
+  listingId?: string; // required for edit
+  showImages?: boolean; // show uploader in edit mode
   onCreated?: (listingId: string) => void;
   onSaved?: () => void;
 };
@@ -32,7 +32,7 @@ type Props = {
 type FormState = {
   make: string;
   model: string;
-  year: string; // keep as string for inputs
+  year: string;
   price: string;
   mileage: string;
   fuel_type: string;
@@ -40,6 +40,8 @@ type FormState = {
   description: string;
   is_active: boolean;
 };
+
+const BUCKET = "car-images";
 
 function toStr(v: any) {
   return v === null || v === undefined ? "" : String(v);
@@ -51,6 +53,81 @@ function isIntString(s: string) {
 
 function isNumberString(s: string) {
   return /^[0-9]+(\.[0-9]+)?$/.test(s.trim());
+}
+
+function getFileExt(filename: string) {
+  const parts = filename.split(".");
+  return parts.length > 1 ? parts.pop()!.toLowerCase() : "jpg";
+}
+
+function safeImageExt(ext: string) {
+  const allowed = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
+  return allowed.has(ext) ? ext : "jpg";
+}
+
+function buildObjectPath(listingId: string, ext: string) {
+  // Keep consistent with ListingImageUploader.tsx
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `listings/${listingId}/${id}.${ext}`;
+}
+
+async function uploadFilesForListing(listingId: string, files: File[]) {
+  if (!files.length) return;
+
+  const uploadedRows: Array<{
+    bucket: string;
+    path: string;
+    position: number;
+  }> = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const ext = safeImageExt(getFileExt(file.name));
+    const path = buildObjectPath(listingId, ext);
+
+    // NOTE: Supabase Storage accepts File directly; no FileReader required.
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.type || undefined,
+      });
+
+    if (uploadError) throw uploadError;
+
+    uploadedRows.push({
+      bucket: BUCKET,
+      path,
+      position: i, // cover is position 0
+    });
+  }
+
+  const payload = uploadedRows.map((r) => ({
+    listing_id: listingId,
+    bucket: r.bucket,
+    path: r.path,
+    position: r.position,
+  }));
+
+  const { error: insertError } = await supabase
+    .from("listing_images")
+    .insert(payload);
+
+  if (insertError) {
+    // best-effort rollback storage
+    try {
+      await supabase.storage
+        .from(BUCKET)
+        .remove(uploadedRows.map((r) => r.path));
+    } catch {
+      // ignore rollback errors
+    }
+    throw insertError;
+  }
 }
 
 export function ListingForm({
@@ -74,13 +151,20 @@ export function ListingForm({
       is_active: initial?.is_active ?? true,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [initial?.id], // refresh defaults when switching listings
+    [initial?.id],
   );
 
   const [form, setForm] = useState<FormState>(defaults);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Create-mode: user can pick images before listing exists; we upload after Save.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
   useEffect(() => setForm(defaults), [defaults]);
+  useEffect(() => {
+    // If user switches listings or mode changes, clear create-mode file selection
+    if (mode !== "create") setPendingFiles([]);
+  }, [mode, initial?.id]);
 
   const validate = (): string | null => {
     if (!form.make.trim()) return "Make is required.";
@@ -109,7 +193,6 @@ export function ListingForm({
       const v = validate();
       if (v) throw new Error(v);
 
-      // Normalize numbers
       const payload = {
         make: form.make.trim(),
         model: form.model.trim(),
@@ -125,11 +208,13 @@ export function ListingForm({
       if (mode === "create") {
         const { data: userRes, error: userErr } = await supabase.auth.getUser();
         if (userErr) throw userErr;
-        if (!userRes?.user)
+        if (!userRes?.user) {
           throw new Error("You must be logged in to create a listing.");
+        }
 
         const seller_id = userRes.user.id;
 
+        // 1) Create listing row
         const { data, error } = await supabase
           .from("listings")
           .insert({ ...payload, seller_id })
@@ -137,7 +222,15 @@ export function ListingForm({
           .single();
 
         if (error) throw error;
-        return { id: data.id as string, mode };
+
+        const newId = data.id as string;
+
+        // 2) Upload any pre-selected images
+        if (pendingFiles.length) {
+          await uploadFilesForListing(newId, pendingFiles);
+        }
+
+        return { id: newId, mode };
       }
 
       // edit
@@ -147,11 +240,16 @@ export function ListingForm({
         .eq("id", listingId!);
 
       if (error) throw error;
+
       return { id: listingId!, mode };
     },
     onSuccess: (res) => {
-      if (res.mode === "create") onCreated?.(res.id);
-      else onSaved?.();
+      if (res.mode === "create") {
+        setPendingFiles([]);
+        onCreated?.(res.id);
+      } else {
+        onSaved?.();
+      }
     },
     onError: (err: any) => {
       setErrorMsg(err?.message ?? "Save failed.");
@@ -168,7 +266,7 @@ export function ListingForm({
             </h1>
             <p className="text-sm text-slate-400 mt-1">
               {mode === "create"
-                ? "Enter details first, then upload images."
+                ? "Enter details and (optionally) choose photos. Photos upload when you save."
                 : "Update details and manage images."}
             </p>
           </div>
@@ -293,14 +391,23 @@ export function ListingForm({
           </Field>
         </div>
 
-        {/* Images: only show uploader in edit mode after listing exists */}
+        {/* Create mode: select images now, upload on Save */}
+        {mode === "create" ? (
+          <div className="mt-6">
+            <ListingImagePicker
+              files={pendingFiles}
+              onChange={setPendingFiles}
+            />
+            <div className="mt-2 text-xs text-slate-400">
+              Tip: the first image is treated as the cover photo.
+            </div>
+          </div>
+        ) : null}
+
+        {/* Edit mode: manage images after listing exists */}
         {showImages && mode === "edit" && listingId ? (
           <div className="mt-6">
             <ListingImageUploader listingId={listingId} />
-          </div>
-        ) : mode === "create" ? (
-          <div className="mt-6 text-sm text-slate-400">
-            Create the listing first, then you’ll be able to upload images.
           </div>
         ) : null}
       </div>
@@ -319,6 +426,125 @@ function Field({
     <div>
       <div className="text-xs text-slate-400 mb-1">{label}</div>
       {children}
+    </div>
+  );
+}
+
+function ListingImagePicker({
+  files,
+  onChange,
+}: {
+  files: File[];
+  onChange: (files: File[]) => void;
+}) {
+  const previews = useMemo(
+    () =>
+      files.map((f) => ({
+        file: f,
+        url: URL.createObjectURL(f),
+      })),
+    [files],
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const p of previews) URL.revokeObjectURL(p.url);
+    };
+  }, [previews]);
+
+  const onPick = (list: FileList | null) => {
+    if (!list) return;
+    const incoming = Array.from(list).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    onChange([...files, ...incoming]);
+  };
+
+  const removeAt = (idx: number) => {
+    onChange(files.filter((_, i) => i !== idx));
+  };
+
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= files.length) return;
+    const next = [...files];
+    const [it] = next.splice(from, 1);
+    next.splice(to, 0, it);
+    onChange(next);
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="font-medium">Photos</div>
+          <div className="text-sm text-slate-400">
+            Choose images now. They’ll upload when you save the listing.
+          </div>
+        </div>
+
+        <label className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 cursor-pointer">
+          Add images
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => onPick(e.target.files)}
+          />
+        </label>
+      </div>
+
+      {previews.length ? (
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {previews.map((p, idx) => (
+            <div
+              key={`${p.file.name}-${idx}`}
+              className="rounded-xl border border-slate-800 p-2"
+            >
+              <img
+                src={p.url}
+                className="w-full h-32 object-cover rounded-lg"
+                alt=""
+              />
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className="text-xs text-slate-400">
+                  {idx === 0 ? "Cover" : `#${idx + 1}`}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
+                    onClick={() => move(idx, idx - 1)}
+                    disabled={idx === 0}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
+                    onClick={() => move(idx, idx + 1)}
+                    disabled={idx === previews.length - 1}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded bg-red-600/80 hover:bg-red-600"
+                    onClick={() => removeAt(idx)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1 text-[11px] text-slate-500 truncate">
+                {p.file.name}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 text-sm text-slate-400">No images selected.</div>
+      )}
     </div>
   );
 }
