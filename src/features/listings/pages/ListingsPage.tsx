@@ -8,7 +8,7 @@ import { FilterBar } from "../components/FilterBar";
 type Filters = {
   search: string;
   make: string;
-  maxPrice: number;
+  maxPrice: number; // DEFAULT_MAX_PRICE means "no limit"
 };
 
 type SortKey = "newest" | "price_asc" | "price_desc";
@@ -32,7 +32,11 @@ type ListingRow = {
 
 const PAGE_SIZE = 12;
 
+// "Unlimited" sentinel for max price
+const DEFAULT_MAX_PRICE = Number.MAX_SAFE_INTEGER;
+
 function toNumber(value: string | null, fallback: number) {
+  if (value === null || value === undefined || value === "") return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -64,7 +68,11 @@ async function fetchListings(args: {
   }
 
   if (filters.make) q = q.eq("make", filters.make);
-  if (filters.maxPrice) q = q.lte("price", filters.maxPrice);
+
+  // Only apply max price filter when user has set a limit
+  if (filters.maxPrice !== DEFAULT_MAX_PRICE) {
+    q = q.lte("price", filters.maxPrice);
+  }
 
   if (sort === "newest") q = q.order("created_at", { ascending: false });
   if (sort === "price_asc") q = q.order("price", { ascending: true });
@@ -109,11 +117,14 @@ export function ListingsPage() {
   const urlFilters = useMemo<Filters>(() => {
     const search = searchParams.get("q") ?? "";
     const make = searchParams.get("make") ?? "";
+
+    // If maxPrice is missing in URL => unlimited
     const maxPrice = clamp(
-      toNumber(searchParams.get("maxPrice"), 200000),
-      10000,
-      200000,
+      toNumber(searchParams.get("maxPrice"), DEFAULT_MAX_PRICE),
+      0,
+      DEFAULT_MAX_PRICE,
     );
+
     return { search, make, maxPrice };
   }, [searchParams]);
 
@@ -137,7 +148,13 @@ export function ListingsPage() {
     if (filters.make) next.set("make", filters.make);
     else next.delete("make");
 
-    next.set("maxPrice", String(filters.maxPrice));
+    // Only store maxPrice in URL if it's not "unlimited"
+    if (filters.maxPrice !== DEFAULT_MAX_PRICE) {
+      next.set("maxPrice", String(filters.maxPrice));
+    } else {
+      next.delete("maxPrice");
+    }
+
     next.set("sort", sort);
 
     setSearchParams(next, { replace: true });
@@ -146,11 +163,10 @@ export function ListingsPage() {
 
   const page = urlPage;
 
-  // ✅ TanStack Query v5: use placeholderData instead of keepPreviousData
   const { data, isLoading, isError, error, isFetching } = useQuery({
     queryKey: ["listings", filters, sort, page],
     queryFn: () => fetchListings({ filters, sort, page }),
-    placeholderData: (prev) => prev, // keeps last page while fetching new
+    placeholderData: (prev) => prev,
     staleTime: 1000 * 15,
   });
 
@@ -292,9 +308,9 @@ export function ListingsPage() {
               <button
                 className="text-sm text-slate-300 hover:text-white"
                 onClick={() => {
+                  // Reset all filters to defaults (including maxPrice unlimited)
                   setSearchParams(
                     new URLSearchParams({
-                      maxPrice: "200000",
                       sort: "newest",
                       page: "1",
                     }),
