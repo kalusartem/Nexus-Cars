@@ -1,9 +1,11 @@
+// src/features/listings/pages/EditListingPage.tsx
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
 import { ListingForm } from "../components/ListingForm";
 import type { ListingRow } from "../components/ListingForm";
 import { fetchAuthUser } from "../../../lib/auth";
+import { fetchIsAdmin } from "../../../lib/admin";
 
 async function fetchListing(id: string) {
   const { data, error } = await supabase
@@ -20,7 +22,18 @@ export function EditListingPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  // 1) Load auth user FIRST and wait for it
+  if (!id) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white p-6">
+        <div className="text-red-300">Missing listing id.</div>
+        <Link to="/listings" className="text-blue-400 hover:underline">
+          Back to listings
+        </Link>
+      </div>
+    );
+  }
+
+  // 1) Load auth user
   const {
     data: user,
     isLoading: isAuthLoading,
@@ -33,29 +46,6 @@ export function EditListingPage() {
   });
 
   const userId = user?.id ?? null;
-
-  // 2) Then load the listing (only after we have a user)
-  const {
-    data: listing,
-    isLoading: isListingLoading,
-    isError: isListingError,
-    error: listingError,
-  } = useQuery({
-    queryKey: ["listing-edit", id],
-    queryFn: () => fetchListing(id!),
-    enabled: !!id && !!userId,
-  });
-
-  if (!id) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white p-6">
-        <div className="text-red-300">Missing listing id.</div>
-        <Link to="/listings" className="text-blue-400 hover:underline">
-          Back to listings
-        </Link>
-      </div>
-    );
-  }
 
   // Auth loading / error states
   if (isAuthLoading) {
@@ -93,8 +83,31 @@ export function EditListingPage() {
     );
   }
 
-  // Listing loading / error states
-  if (isListingLoading) {
+  // 2) Load admin flag (only once user is known)
+  const {
+    data: isAdmin,
+    isLoading: isAdminLoading,
+    isError: isAdminError,
+  } = useQuery({
+    queryKey: ["is-admin", userId],
+    enabled: !!userId,
+    queryFn: () => fetchIsAdmin(userId),
+    staleTime: 1000 * 30,
+  });
+
+  // 3) Load the listing
+  const {
+    data: listing,
+    isLoading: isListingLoading,
+    isError: isListingError,
+    error: listingError,
+  } = useQuery({
+    queryKey: ["listing-edit", id],
+    queryFn: () => fetchListing(id),
+    enabled: !!id && !!userId,
+  });
+
+  if (isListingLoading || isAdminLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white p-6">
         Loading listing…
@@ -127,8 +140,12 @@ export function EditListingPage() {
     );
   }
 
-  // Ownership guard
-  if (listing.seller_id !== userId) {
+  // If admin lookup errored, default to non-admin (but don't crash)
+  const admin = !!isAdmin && !isAdminError;
+
+  const canEdit = admin || listing.seller_id === userId;
+
+  if (!canEdit) {
     return (
       <div className="min-h-screen bg-slate-950 text-white p-6">
         <div className="text-red-300">
