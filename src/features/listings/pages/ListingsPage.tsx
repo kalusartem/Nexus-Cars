@@ -255,20 +255,6 @@ export function ListingsPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Link
-              to="/sell"
-              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm"
-            >
-              Sell
-            </Link>
-
-            <Link
-              to="/favorites"
-              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm"
-            >
-              Saved
-            </Link>
-
             <div className="flex items-center gap-2">
               <label className="text-sm text-slate-300">Sort</label>
               <select
