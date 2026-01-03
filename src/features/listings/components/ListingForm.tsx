@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
-import { ListingImageUploader } from "./ListingImageUploader";
 
 export type ListingRow = {
   id: string;
@@ -401,13 +400,6 @@ export function ListingForm({
             <div className="mt-2 text-xs text-slate-400">
               Tip: the first image is treated as the cover photo.
             </div>
-          </div>
-        ) : null}
-
-        {/* Edit mode: manage images after listing exists */}
-        {showImages && mode === "edit" && listingId ? (
-          <div className="mt-6">
-            <ListingImageUploader listingId={listingId} />
           </div>
         ) : null}
       </div>
