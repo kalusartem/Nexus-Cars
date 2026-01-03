@@ -37,6 +37,21 @@ export function FilterBar({ filters, setFilters }: Props) {
     return Array.from(uniq).sort((a, b) => a.localeCompare(b));
   }, [data]);
 
+  const DEFAULT_MAX_PRICE = Number.MAX_SAFE_INTEGER;
+  const UI_MAX_PRICE = 200000;
+
+  const sliderValue =
+    filters.maxPrice === DEFAULT_MAX_PRICE ? UI_MAX_PRICE : filters.maxPrice;
+
+  const maxPriceLabel =
+    filters.maxPrice === DEFAULT_MAX_PRICE
+      ? "No max"
+      : new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 0,
+        }).format(filters.maxPrice);
+
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
       <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800 flex flex-wrap gap-4 items-center">
@@ -77,19 +92,22 @@ export function FilterBar({ filters, setFilters }: Props) {
         </div>
 
         <div className="flex flex-col flex-1 min-w-[200px]">
-          <span className="text-xs text-slate-400 mb-1">
-            Max Price: ${filters.maxPrice.toLocaleString()}
-          </span>
+          <div className="text-sm text-slate-300 mb-1">
+            Max Price: {maxPriceLabel}
+          </div>
           <input
             type="range"
-            min="10000"
-            max="200000"
-            step="5000"
-            value={filters.maxPrice}
-            className="accent-blue-500"
-            onChange={(e) =>
-              setFilters({ ...filters, maxPrice: Number(e.target.value) })
-            }
+            min={10000}
+            max={UI_MAX_PRICE}
+            step={1000}
+            value={sliderValue}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setFilters((prev) => ({
+                ...prev,
+                maxPrice: v >= UI_MAX_PRICE ? DEFAULT_MAX_PRICE : v,
+              }));
+            }}
           />
         </div>
       </div>
