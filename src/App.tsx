@@ -15,12 +15,16 @@ export default function App() {
   const [filters, setFilters] = useState({
     search: "",
     make: "",
-    maxPrice: 200000,
+    // Number.MAX_SAFE_INTEGER means "no max" (keeps behavior consistent with Browse page)
+    maxPrice: Number.MAX_SAFE_INTEGER,
+    zip: "",
+    radiusMiles: 0,
   });
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50">
-      <nav className="border-b border-slate-800 p-4 flex items-center justify-between">
+      {/* z-40 keeps header above page content; account popover will be higher (z-50+) */}
+      <nav className="border-b border-slate-800 p-4 flex items-center justify-between relative z-40">
         <Link
           to="/"
           className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400"

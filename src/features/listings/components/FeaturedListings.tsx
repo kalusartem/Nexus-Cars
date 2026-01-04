@@ -7,6 +7,8 @@ type Filters = {
   search: string;
   make: string;
   maxPrice: number;
+  zip: string;
+  radiusMiles: number;
 };
 
 type ListingImage = {
@@ -36,10 +38,12 @@ function publicUrl(bucket: string, path: string) {
 }
 
 async function fetchFeatured(filters: Filters) {
+  const DEFAULT_MAX_PRICE = Number.MAX_SAFE_INTEGER;
   let q = supabase
     .from("listings")
     .select("*, listing_images(bucket, path, position)")
     .eq("is_active", true)
+    .eq("is_featured", true)
     .order("created_at", { ascending: false })
     .limit(6);
 
@@ -49,7 +53,7 @@ async function fetchFeatured(filters: Filters) {
   }
 
   if (filters.make) q = q.eq("make", filters.make);
-  if (filters.maxPrice) q = q.lte("price", filters.maxPrice);
+  if (filters.maxPrice !== DEFAULT_MAX_PRICE) q = q.lte("price", filters.maxPrice);
 
   const { data, error } = await q;
   if (error) throw error;

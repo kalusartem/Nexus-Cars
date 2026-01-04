@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
+import { geocodeZip } from "../../../lib/location";
 
 type Mode = "create" | "edit";
 
@@ -20,6 +21,10 @@ export type ListingRow = {
 
   description: string | null;
   is_active: boolean | null;
+
+  zip_code?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 
   created_at?: string;
 };
@@ -43,6 +48,7 @@ type Props = {
 type FormState = {
   make: string;
   model: string;
+  zip_code: string;
   year: string;
   price: string;
   mileage: string;
@@ -220,6 +226,7 @@ export function ListingForm({
     () => ({
       make: toStr(initial?.make),
       model: toStr(initial?.model),
+      zip_code: toStr((initial as any)?.zip_code),
       year: toStr(initial?.year),
       price: toStr(initial?.price),
       mileage: toStr(initial?.mileage),
@@ -261,6 +268,40 @@ export function ListingForm({
       setDeletedImageIds(new Set());
     }
   }, [imagesQuery.data]);
+
+  // Catalog (optional): brands + models from the DB
+  const brandsQuery = useQuery({
+    queryKey: ["brands"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("brands")
+        .select("id, name")
+        .order("name", { ascending: true });
+      if (error) return [];
+      return (data ?? []) as Array<{ id: string; name: string }>;
+    },
+    staleTime: 1000 * 60 * 10,
+  });
+
+  const selectedBrandId = useMemo(() => {
+    const b = (brandsQuery.data ?? []).find((x) => x.name === form.make);
+    return b?.id ?? null;
+  }, [brandsQuery.data, form.make]);
+
+  const modelsQuery = useQuery({
+    queryKey: ["models", selectedBrandId],
+    enabled: !!selectedBrandId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("models")
+        .select("id, name")
+        .eq("brand_id", selectedBrandId!)
+        .order("name", { ascending: true });
+      if (error) return [];
+      return (data ?? []) as Array<{ id: string; name: string }>;
+    },
+    staleTime: 1000 * 60 * 10,
+  });
 
   const visibleExisting = useMemo(
     () => existingImages.filter((img) => !deletedImageIds.has(img.id)),
@@ -353,9 +394,16 @@ export function ListingForm({
       if (v) throw new Error(v);
 
       // Listing payload
+      // Location: store ZIP + precomputed lat/lng for fast radius search
+      const zip = form.zip_code.trim();
+      const ll = zip ? await geocodeZip(zip) : null;
+
       const payload = {
         make: form.make.trim(),
         model: form.model.trim(),
+        zip_code: zip || null,
+        lat: ll?.lat ?? null,
+        lng: ll?.lng ?? null,
         year: Number(form.year),
         price: Number(form.price),
         mileage: Number(form.mileage),
@@ -496,20 +544,62 @@ export function ListingForm({
 
         <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Make">
-            <input
-              className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
-              value={form.make}
-              onChange={(e) => setForm({ ...form, make: e.target.value })}
-              placeholder="e.g., Toyota"
-            />
+            {(brandsQuery.data ?? []).length ? (
+              <select
+                className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
+                value={form.make}
+                onChange={(e) =>
+                  setForm({ ...form, make: e.target.value, model: "" })
+                }
+              >
+                <option value="">Select…</option>
+                {(brandsQuery.data ?? []).map((b) => (
+                  <option key={b.id} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
+                value={form.make}
+                onChange={(e) => setForm({ ...form, make: e.target.value })}
+                placeholder="e.g., Toyota"
+              />
+            )}
           </Field>
 
           <Field label="Model">
+            {(modelsQuery.data ?? []).length ? (
+              <select
+                className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+              >
+                <option value="">Select…</option>
+                {(modelsQuery.data ?? []).map((m) => (
+                  <option key={m.id} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                placeholder="e.g., Camry"
+              />
+            )}
+          </Field>
+
+          <Field label="ZIP Code">
             <input
               className="w-full bg-slate-800 rounded-lg px-3 py-2 text-white"
-              value={form.model}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder="e.g., Camry"
+              value={form.zip_code}
+              onChange={(e) => setForm({ ...form, zip_code: e.target.value })}
+              inputMode="numeric"
+              placeholder="e.g., 10001"
             />
           </Field>
 

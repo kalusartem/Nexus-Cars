@@ -4,11 +4,14 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
 import { FilterBar } from "../components/FilterBar";
+import { geocodeZip } from "../../../lib/location";
 
 type Filters = {
   search: string;
   make: string;
   maxPrice: number; // DEFAULT_MAX_PRICE means "no limit"
+  zip: string;
+  radiusMiles: number; // 0 = ignore
 };
 
 type SortKey = "newest" | "price_asc" | "price_desc";
@@ -30,7 +33,8 @@ type ListingRow = {
   listing_images?: ListingImage[] | null;
 };
 
-const PAGE_SIZE = 12;
+// Browse page requirement: paginate at 25
+const PAGE_SIZE = 25;
 
 // "Unlimited" sentinel for max price
 const DEFAULT_MAX_PRICE = Number.MAX_SAFE_INTEGER;
@@ -56,6 +60,54 @@ async function fetchListings(args: {
   page: number;
 }): Promise<{ rows: ListingRow[]; count: number }> {
   const { filters, sort, page } = args;
+
+  // Location-aware search uses a lightweight RPC to get ordered IDs within radius,
+  // then pulls the listing rows + images in a second query.
+  const useRadius = !!filters.zip.trim() && (filters.radiusMiles ?? 0) > 0;
+  if (useRadius) {
+    const ll = await geocodeZip(filters.zip);
+    if (!ll) {
+      // If ZIP can't be geocoded, fall back to normal search (no radius).
+    } else {
+      const { data: idRows, error: idErr } = await supabase.rpc(
+        "search_listing_ids_within_radius",
+        {
+          p_lat: ll.lat,
+          p_lng: ll.lng,
+          p_radius_miles: filters.radiusMiles,
+          p_search: filters.search?.trim() || null,
+          p_make: filters.make || null,
+          p_max_price:
+            filters.maxPrice === DEFAULT_MAX_PRICE ? null : filters.maxPrice,
+          p_sort: sort,
+          p_page: page,
+          p_page_size: PAGE_SIZE,
+        },
+      );
+
+      if (idErr) {
+        // If the RPC isn't deployed yet, we fall back gracefully.
+      } else {
+        const ids = (idRows ?? []).map((r: any) => r.listing_id as string);
+        const totalCount =
+          (idRows?.[0]?.total_count as number | undefined) ?? 0;
+        if (!ids.length) return { rows: [], count: totalCount };
+
+        const { data, error } = await supabase
+          .from("listings")
+          .select("*, listing_images(bucket, path, position)", { count: "exact" })
+          .in("id", ids);
+        if (error) throw error;
+
+        const order = new Map(ids.map((id, idx) => [id, idx]));
+        const rows = ((data ?? []) as ListingRow[]).slice().sort((a, b) => {
+          return (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
+        });
+
+        return { rows, count: totalCount };
+      }
+    }
+  }
 
   let q = supabase
     .from("listings")
@@ -117,6 +169,8 @@ export function ListingsPage() {
   const urlFilters = useMemo<Filters>(() => {
     const search = searchParams.get("q") ?? "";
     const make = searchParams.get("make") ?? "";
+    const zip = searchParams.get("zip") ?? "";
+    const radiusMiles = clamp(toNumber(searchParams.get("radius"), 0), 0, 500);
 
     // If maxPrice is missing in URL => unlimited
     const maxPrice = clamp(
@@ -125,7 +179,7 @@ export function ListingsPage() {
       DEFAULT_MAX_PRICE,
     );
 
-    return { search, make, maxPrice };
+    return { search, make, maxPrice, zip, radiusMiles };
   }, [searchParams]);
 
   const urlSort = (searchParams.get("sort") as SortKey) ?? "newest";
@@ -148,6 +202,13 @@ export function ListingsPage() {
     if (filters.make) next.set("make", filters.make);
     else next.delete("make");
 
+    if (filters.zip) next.set("zip", filters.zip);
+    else next.delete("zip");
+
+    if (filters.radiusMiles && filters.radiusMiles > 0)
+      next.set("radius", String(filters.radiusMiles));
+    else next.delete("radius");
+
     // Only store maxPrice in URL if it's not "unlimited"
     if (filters.maxPrice !== DEFAULT_MAX_PRICE) {
       next.set("maxPrice", String(filters.maxPrice));
@@ -159,7 +220,7 @@ export function ListingsPage() {
 
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.search, filters.make, filters.maxPrice, sort]);
+  }, [filters.search, filters.make, filters.zip, filters.radiusMiles, filters.maxPrice, sort]);
 
   const page = urlPage;
 

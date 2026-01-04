@@ -1,7 +1,8 @@
 // src/features/listings/pages/ListingDetailsPage.tsx
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
+import { fetchIsAdmin } from "../../../lib/admin";
 
 type ListingImage = {
   bucket: string;
@@ -11,6 +12,7 @@ type ListingImage = {
 
 type ListingRow = {
   id: string;
+  seller_id: string;
   make: string;
   model: string;
   year: number | null;
@@ -55,11 +57,22 @@ function formatDate(date: any) {
 
 export function ListingDetailsPage() {
   const { id } = useParams<{ id: string }>();
+  const qc = useQueryClient();
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["listing", id],
     queryFn: () => fetchListing(id!),
     enabled: !!id,
+  });
+
+  const { data: userId } = useQuery({
+    queryKey: ["auth-user-id"],
+    queryFn: async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (error) return null;
+      return data?.user?.id ?? null;
+    },
+    staleTime: 1000 * 30,
   });
 
   if (!id) {
@@ -102,6 +115,55 @@ export function ListingDetailsPage() {
       </div>
     );
   }
+
+  const { data: isAdmin } = useQuery({
+    queryKey: ["is-admin", userId],
+    queryFn: () => fetchIsAdmin(userId ?? null),
+    enabled: !!userId,
+    staleTime: 1000 * 60,
+  });
+
+  const { data: isFav } = useQuery({
+    queryKey: ["favorite", userId, row.id],
+    enabled: !!userId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("favorites")
+        .select("id")
+        .eq("user_id", userId!)
+        .eq("listing_id", row.id)
+        .maybeSingle();
+      if (error) throw error;
+      return !!data?.id;
+    },
+    staleTime: 1000 * 10,
+  });
+
+  const toggleFavorite = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("Please log in to save favorites.");
+      if (isFav) {
+        const { error } = await supabase
+          .from("favorites")
+          .delete()
+          .eq("user_id", userId)
+          .eq("listing_id", row.id);
+        if (error) throw error;
+        return false;
+      }
+      const { error } = await supabase
+        .from("favorites")
+        .insert({ user_id: userId, listing_id: row.id });
+      if (error) throw error;
+      return true;
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["favorite", userId, row.id] });
+      await qc.invalidateQueries({ queryKey: ["favorites"] });
+    },
+  });
+
+  const canEdit = !!userId && (userId === row.seller_id || !!isAdmin);
 
   const images = (row.listing_images ?? [])
     .slice()
@@ -184,20 +246,26 @@ export function ListingDetailsPage() {
 
           {/* CTAs */}
           <div className="mt-6 flex gap-3 flex-wrap">
-            <button className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">
-              Save (next)
+            <button
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50"
+              disabled={!userId || toggleFavorite.isPending}
+              onClick={() => toggleFavorite.mutate()}
+              title={userId ? "Save to favorites" : "Log in to save"}
+            >
+              {isFav ? "Saved ❤️" : "Save"}
             </button>
             <button className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700">
               Contact seller (next)
             </button>
 
-            {/* Optional: edit link for owner (you can guard this later) */}
-            <Link
-              to={`/listings/${row.id}/edit`}
-              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700"
-            >
-              Edit
-            </Link>
+            {canEdit ? (
+              <Link
+                to={`/listings/${row.id}/edit`}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700"
+              >
+                Edit
+              </Link>
+            ) : null}
           </div>
         </div>
       </div>
