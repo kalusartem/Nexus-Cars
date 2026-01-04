@@ -2,6 +2,14 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../../../lib/supabase";
 
+type ListingMini = {
+  id: string;
+  make: string;
+  model: string;
+  year: number | null;
+  price: number | string;
+};
+
 type InquiryRow = {
   id: string;
   listing_id: string;
@@ -9,13 +17,7 @@ type InquiryRow = {
   seller_id: string;
   message: string;
   created_at: string;
-  listings?: {
-    id: string;
-    make: string;
-    model: string;
-    year: number | null;
-    price: number | string;
-  } | null;
+  listings?: ListingMini[] | null;
 };
 
 type Thread = {
@@ -50,7 +52,7 @@ export function InboxPage() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return (data ?? []) as InquiryRow[];
+      return (data ?? []) as unknown as InquiryRow[];
     },
   });
 
@@ -96,7 +98,7 @@ export function InboxPage() {
         seller_id: msg.seller_id,
         last_message: msg.message,
         last_at: msg.created_at,
-        listing: msg.listings ?? null,
+        listing: (msg.listings?.[0] ?? null),
       });
     }
   }
