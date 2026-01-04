@@ -95,11 +95,15 @@ async function fetchListings(args: {
 
         const { data, error } = await supabase
           .from("listings")
-          .select("*, listing_images(bucket, path, position)", { count: "exact" })
+          .select("*, listing_images(bucket, path, position)", {
+            count: "exact",
+          })
           .in("id", ids);
         if (error) throw error;
 
-        const order = new Map(ids.map((id, idx) => [id, idx]));
+        const order = new Map<string, number>(
+          ids.map((id: string, idx: number): [string, number] => [id, idx]),
+        );
         const rows = ((data ?? []) as ListingRow[]).slice().sort((a, b) => {
           return (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
         });
@@ -220,7 +224,14 @@ export function ListingsPage() {
 
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.search, filters.make, filters.zip, filters.radiusMiles, filters.maxPrice, sort]);
+  }, [
+    filters.search,
+    filters.make,
+    filters.zip,
+    filters.radiusMiles,
+    filters.maxPrice,
+    sort,
+  ]);
 
   const page = urlPage;
 
