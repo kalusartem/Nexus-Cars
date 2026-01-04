@@ -66,6 +66,14 @@ export function AccountMenu() {
               </div>
 
               <Link
+                to="/favorites"
+                className="block px-3 py-2 text-sm hover:bg-slate-900"
+                onClick={() => setOpen(false)}
+              >
+                Favorites
+              </Link>
+
+              <Link
                 to="/messages"
                 className="block px-3 py-2 text-sm hover:bg-slate-900"
                 onClick={() => setOpen(false)}
@@ -82,32 +90,19 @@ export function AccountMenu() {
               </Link>
 
               <Link
-                to="/sell"
-                className="block px-3 py-2 text-sm hover:bg-slate-900"
-                onClick={() => setOpen(false)}
-              >
-                Sell
-              </Link>
-              <Link
-                to="/favorites"
-                className="block px-3 py-2 text-sm hover:bg-slate-900"
-                onClick={() => setOpen(false)}
-              >
-                Favorites
-              </Link>
-              <Link
-                to="/inbox"
-                className="block px-3 py-2 text-sm hover:bg-slate-900"
-                onClick={() => setOpen(false)}
-              >
-                Inbox
-              </Link>
-              <Link
                 to="/account/listings"
                 className="block px-3 py-2 text-sm hover:bg-slate-900"
                 onClick={() => setOpen(false)}
               >
                 My Listings
+              </Link>
+
+              <Link
+                to="/sell"
+                className="block px-3 py-2 text-sm hover:bg-slate-900"
+                onClick={() => setOpen(false)}
+              >
+                Sell
               </Link>
 
               <button
